@@ -391,6 +391,7 @@ pub enum ApiEvent {
         host_id: String,
         pane_id: Option<String>,
     },
+    HostsUpdated,
     Failed(String),
     Json(serde_json::Value),
 }
@@ -1907,6 +1908,7 @@ pub fn parse_sse_ui_event(raw_json: &str) -> Option<ApiEvent> {
             })
         }
         "showMainWindow" => Some(ApiEvent::ShowMainWindow),
+        "hostsUpdated" => Some(ApiEvent::HostsUpdated),
         "openStandaloneTerminal" => {
             let host_id = val
                 .get("hostId")
@@ -1995,6 +1997,12 @@ mod tests {
             }
             _ => panic!("expected RevealTerminal"),
         }
+
+        let hosts_updated = r#"{"type":"hostsUpdated"}"#;
+        assert!(matches!(
+            parse_sse_ui_event(hosts_updated),
+            Some(ApiEvent::HostsUpdated)
+        ));
     }
 
     #[test]

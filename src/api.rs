@@ -143,6 +143,12 @@ async fn api_open_terminal_window(
 
 async fn api_show_window(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     state.terminals.notify_show_main_window();
+    if state.inspector.try_claim_wave(Duration::from_secs(10)) {
+        let bg = state.clone();
+        tokio::spawn(async move {
+            inspect_fleet_wave(&bg, true).await;
+        });
+    }
     (StatusCode::OK, Json(json!({ "ok": true })))
 }
 
@@ -158,17 +164,41 @@ fn err_response(status: StatusCode, msg: impl ToString) -> impl IntoResponse {
 
 async fn list_hosts(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     match state.db.list_public_hosts() {
-        Ok(hosts) => (
-            StatusCode::OK,
-            Json(json!({
-                "ok": true,
-                "hosts": hosts,
-                "inspections": state.inspector.get_all_cached(),
-            })),
-        )
-            .into_response(),
+        Ok(hosts) => {
+            let has_non_online = hosts
+                .iter()
+                .any(|h| !h.archived && h.status != "online");
+            if has_non_online && state.inspector.try_claim_wave(Duration::from_secs(15)) {
+                let bg = state.clone();
+                tokio::spawn(async move {
+                    inspect_fleet_wave(&bg, true).await;
+                });
+            }
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "ok": true,
+                    "hosts": hosts,
+                    "inspections": state.inspector.get_all_cached(),
+                })),
+            )
+                .into_response()
+        }
         Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
     }
+}
+
+/// 后台异步触发单台主机的状态检测与硬件快照采集，完成后通过 SSE 广播 `hostsUpdated`。
+fn spawn_single_host_inspect(state: &Arc<AppState>, host_id: &str) {
+    let st = state.clone();
+    let hid = host_id.to_string();
+    tokio::spawn(async move {
+        let _ = st
+            .inspector
+            .inspect_host(&st.ssh_pool, &st.db, &hid)
+            .await;
+        st.terminals.notify_hosts_updated();
+    });
 }
 
 async fn create_host(
@@ -181,14 +211,17 @@ async fn create_host(
         let _ = state.db.set_setting("proxy_mode", "per_host");
     }
     match state.db.create_host(payload) {
-        Ok(host) => (
-            StatusCode::OK,
-            Json(json!({
-                "ok": true,
-                "host": host,
-            })),
-        )
-            .into_response(),
+        Ok(host) => {
+            spawn_single_host_inspect(&state, &host.id);
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "ok": true,
+                    "host": host,
+                })),
+            )
+                .into_response()
+        }
         Err(e) => err_response(StatusCode::BAD_REQUEST, e).into_response(),
     }
 }
@@ -205,14 +238,17 @@ async fn update_host(
     }
     state.ssh_pool.invalidate_host(&id).await;
     match state.db.update_host(&id, payload) {
-        Ok(host) => (
-            StatusCode::OK,
-            Json(json!({
-                "ok": true,
-                "host": host,
-            })),
-        )
-            .into_response(),
+        Ok(host) => {
+            spawn_single_host_inspect(&state, &host.id);
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "ok": true,
+                    "host": host,
+                })),
+            )
+                .into_response()
+        }
         Err(e) => err_response(StatusCode::BAD_REQUEST, e).into_response(),
     }
 }
@@ -295,18 +331,26 @@ async fn delete_host(
 
 async fn import_from_1shell(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     match state.db.import_from_1shell() {
-        Ok(imported) => match state.db.list_public_hosts() {
-            Ok(hosts) => (
-                StatusCode::OK,
-                Json(json!({
-                    "ok": true,
-                    "imported": imported,
-                    "hosts": hosts,
-                })),
-            )
-                .into_response(),
-            Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
-        },
+        Ok(imported) => {
+            if imported > 0 {
+                let bg = state.clone();
+                tokio::spawn(async move {
+                    inspect_fleet_wave(&bg, false).await;
+                });
+            }
+            match state.db.list_public_hosts() {
+                Ok(hosts) => (
+                    StatusCode::OK,
+                    Json(json!({
+                        "ok": true,
+                        "imported": imported,
+                        "hosts": hosts,
+                    })),
+                )
+                    .into_response(),
+                Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+            }
+        }
         Err(e) => err_response(StatusCode::BAD_REQUEST, e).into_response(),
     }
 }
@@ -320,6 +364,7 @@ async fn check_single_host(
         .inspect_host(&state.ssh_pool, &state.db, &id)
         .await
         .ok();
+    state.terminals.notify_hosts_updated();
     match state.db.get_public_host(&id) {
         Ok(Some(host)) => (
             StatusCode::OK,
@@ -360,27 +405,57 @@ async fn inspect_single_host(
     }
 }
 
-async fn check_all_hosts(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let records = match state.db.list_records() {
-        Ok(r) => r,
-        Err(e) => return err_response(StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+/// 并发巡检一轮未归档主机（`only_non_online = true` 时仅补检非 `online` 状态的主机），
+/// 并在巡检过程中按节流（800ms）与巡检结束时通过 SSE 广播 `hostsUpdated` 通知前端刷新列表。
+pub async fn inspect_fleet_wave(state: &Arc<AppState>, only_non_online: bool) {
+    let Ok(records) = state.db.list_records() else {
+        return;
     };
+    let targets: Vec<_> = records
+        .into_iter()
+        .filter(|r| !r.archived && (!only_non_online || r.status != "online"))
+        .collect();
+    if targets.is_empty() {
+        return;
+    }
 
-    let active_hosts: Vec<_> = records.into_iter().filter(|r| !r.archived).collect();
-
-    let db = state.db.clone();
-    let pool = state.ssh_pool.clone();
-    let inspector = state.inspector.clone();
-    stream::iter(active_hosts)
+    state.inspector.mark_wave_now();
+    let last_notify = Arc::new(Mutex::new(Instant::now()));
+    stream::iter(targets)
         .for_each_concurrent(8, |record| {
-            let db = db.clone();
-            let pool = pool.clone();
-            let inspector = inspector.clone();
+            let st = state.clone();
+            let last_notify = last_notify.clone();
             async move {
-                let _ = inspector.inspect_host(&pool, &db, &record.id).await;
+                let _ = st
+                    .inspector
+                    .inspect_host(&st.ssh_pool, &st.db, &record.id)
+                    .await;
+                let should_notify = {
+                    let mut g = last_notify.lock().unwrap();
+                    if g.elapsed() >= Duration::from_millis(800) {
+                        *g = Instant::now();
+                        true
+                    } else {
+                        false
+                    }
+                };
+                if should_notify {
+                    st.terminals.notify_hosts_updated();
+                }
             }
         })
         .await;
+
+    state.inspector.mark_wave_now();
+    state.terminals.notify_hosts_updated();
+}
+
+async fn check_all_hosts(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    if let Err(e) = state.db.list_records() {
+        return err_response(StatusCode::INTERNAL_SERVER_ERROR, e).into_response();
+    }
+
+    inspect_fleet_wave(&state, false).await;
 
     match state.db.list_public_hosts() {
         Ok(hosts) => (
@@ -440,6 +515,7 @@ async fn create_terminal(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<CreateTerminalPayload>,
 ) -> impl IntoResponse {
+    let host_id = payload.host_id.clone();
     match state
         .terminals
         .create_pane(
@@ -453,14 +529,26 @@ async fn create_terminal(
         )
         .await
     {
-        Ok(pane) => (
-            StatusCode::OK,
-            Json(json!({
-                "ok": true,
-                "pane": pane,
-            })),
-        )
-            .into_response(),
+        Ok(pane) => {
+            if host_id != LOCAL_HOST_ID
+                && state
+                    .db
+                    .get_record(&host_id)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|r| r.os_info.is_none() || r.latency_ms.is_none())
+            {
+                spawn_single_host_inspect(&state, &host_id);
+            }
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "ok": true,
+                    "pane": pane,
+                })),
+            )
+                .into_response()
+        }
         Err(e) => err_response(StatusCode::BAD_REQUEST, format!("{e:#}")).into_response(),
     }
 }
@@ -604,14 +692,28 @@ async fn api_prewarm_files(
     State(state): State<Arc<AppState>>,
     Json(p): Json<PrewarmPayload>,
 ) -> impl IntoResponse {
-    let pool = state.ssh_pool.clone();
-    let db = state.db.clone();
+    let st = state.clone();
     let host_id = p.host_id.clone();
     let cwd = p.cwd.clone();
     tokio::spawn(async move {
-        if let Ok(listing) = files::list_dir(&pool, &db, &host_id, cwd.as_deref(), false).await {
-            if let Some(ref parent) = listing.parent {
-                let _ = files::list_dir(&pool, &db, &host_id, Some(parent), false).await;
+        let prev_status = st
+            .db
+            .get_record(&host_id)
+            .ok()
+            .flatten()
+            .map(|r| r.status);
+        match files::list_dir(&st.ssh_pool, &st.db, &host_id, cwd.as_deref(), false).await {
+            Ok(listing) => {
+                if prev_status.as_deref() != Some("online") {
+                    st.terminals.notify_hosts_updated();
+                }
+                if let Some(ref parent) = listing.parent {
+                    let _ = files::list_dir(&st.ssh_pool, &st.db, &host_id, Some(parent), false)
+                        .await;
+                }
+            }
+            Err(_) => {
+                st.terminals.notify_hosts_updated();
             }
         }
     });
@@ -622,6 +724,7 @@ async fn api_list_dir(
     State(state): State<Arc<AppState>>,
     Query(q): Query<FileQuery>,
 ) -> impl IntoResponse {
+    let prev_record = state.db.get_record(&q.host_id).ok().flatten();
     match files::list_dir(
         &state.ssh_pool,
         &state.db,
@@ -632,6 +735,17 @@ async fn api_list_dir(
     .await
     {
         Ok(listing) => {
+            if q.host_id != LOCAL_HOST_ID {
+                if prev_record.as_ref().map(|r| r.status.as_str()) != Some("online") {
+                    state.terminals.notify_hosts_updated();
+                }
+                if prev_record
+                    .as_ref()
+                    .is_some_and(|r| r.os_info.is_none() || r.latency_ms.is_none())
+                {
+                    spawn_single_host_inspect(&state, &q.host_id);
+                }
+            }
             // 后台自动预热上级目录与前 6 个子目录，让后续点击子目录或返回上级 0ms 瞬开
             if q.host_id != LOCAL_HOST_ID {
                 let pool = state.ssh_pool.clone();
@@ -666,7 +780,12 @@ async fn api_list_dir(
             )
                 .into_response()
         }
-        Err(e) => err_response(StatusCode::BAD_REQUEST, format!("{e:#}")).into_response(),
+        Err(e) => {
+            if q.host_id != LOCAL_HOST_ID {
+                state.terminals.notify_hosts_updated();
+            }
+            err_response(StatusCode::BAD_REQUEST, format!("{e:#}")).into_response()
+        }
     }
 }
 
@@ -1370,6 +1489,10 @@ async fn api_set_autostart(
     }
     if proxy_changed {
         state.ssh_pool.invalidate_all().await;
+        let bg = state.clone();
+        tokio::spawn(async move {
+            inspect_fleet_wave(&bg, true).await;
+        });
     }
     let enabled = check_autostart_enabled();
     let close_action = state

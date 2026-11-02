@@ -26,7 +26,7 @@ export interface PublicHost {
   addr: string;
   port: number;
   username: string;
-  authType: 'local' | 'password' | 'privateKey';
+  authType: 'local' | 'password' | 'privateKey' | 'none';
   hasPassword: boolean;
   hasPrivateKey: boolean;
   hasPassphrase: boolean;
@@ -54,7 +54,7 @@ export interface HostUpsertPayload {
   addr: string;
   port: number;
   username: string;
-  authType: 'password' | 'privateKey';
+  authType: 'password' | 'privateKey' | 'none';
   password?: string;
   privateKey?: string;
   passphrase?: string;

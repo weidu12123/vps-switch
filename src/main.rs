@@ -237,24 +237,25 @@ fn main() -> Result<()> {
         sync_status.claude_code_synced, sync_status.codex_synced
     );
 
-    // 启动时后台并发执行全机队快照预热
+    // 启动后台机队状态巡检：
+    // 1. 启动错峰 2s 后执行首轮全机队并发检测（避开开机自启瞬间的网卡未拨号窗口）；
+    // 2. 启动后 15s 执行一次快速补检（仅针对未在线主机，覆盖刚开机稍晚启动本机代理的场景）；
+    // 3. 常驻循环：每 45s 补检一次非在线主机，每 4 轮（180s / 3分钟）执行一次全机队状态与探针刷新。
     {
         let bg_state = state.clone();
         rt.spawn(async move {
-            use futures::stream::{self, StreamExt};
-            if let Ok(records) = bg_state.db.list_records() {
-                let active: Vec<_> = records.into_iter().filter(|r| !r.archived).collect();
-                stream::iter(active)
-                    .for_each_concurrent(8, |rec| {
-                        let st = bg_state.clone();
-                        async move {
-                            let _ = st
-                                .inspector
-                                .inspect_host(&st.ssh_pool, &st.db, &rec.id)
-                                .await;
-                        }
-                    })
-                    .await;
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            api::inspect_fleet_wave(&bg_state, false).await;
+
+            tokio::time::sleep(Duration::from_secs(15)).await;
+            api::inspect_fleet_wave(&bg_state, true).await;
+
+            let mut tick_count: u64 = 0;
+            loop {
+                tokio::time::sleep(Duration::from_secs(45)).await;
+                tick_count = tick_count.wrapping_add(1);
+                let only_non_online = tick_count % 4 != 0;
+                api::inspect_fleet_wave(&bg_state, only_non_online).await;
             }
         });
     }

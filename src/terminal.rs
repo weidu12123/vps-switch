@@ -86,6 +86,7 @@ pub enum UiEvent {
         host_id: String,
         pane_id: Option<String>,
     },
+    HostsUpdated,
 }
 
 #[derive(Clone)]
@@ -656,6 +657,10 @@ impl TerminalManager {
         });
     }
 
+    pub fn notify_hosts_updated(&self) {
+        let _ = self.ui_events_tx.send(UiEvent::HostsUpdated);
+    }
+
     pub fn list_panes(
         &self,
         host_id_filter: Option<&str>,
@@ -768,7 +773,7 @@ impl TerminalManager {
                 headless,
             )?
         } else {
-            spawn_ssh_pty_pane(
+            match spawn_ssh_pty_pane(
                 pool,
                 db,
                 pane_id.clone(),
@@ -778,7 +783,17 @@ impl TerminalManager {
                 initial_cwd,
                 headless,
             )
-            .await?
+            .await
+            {
+                Ok(h) => {
+                    self.notify_hosts_updated();
+                    h
+                }
+                Err(err) => {
+                    self.notify_hosts_updated();
+                    return Err(err);
+                }
+            }
         };
 
         let meta = handle.snapshot_meta();

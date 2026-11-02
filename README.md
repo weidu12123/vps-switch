@@ -52,21 +52,21 @@ VPS Switch 是一个本地优先的主机管理工具。它集成了终端、文
 前往 [**GitHub Releases**](https://github.com/weidu12123/vps-switch/releases/latest) 获取最新版本：
 
 ### Windows
-- **`vps-switch-0.1.1-windows-x64-setup.exe`（推荐）**：标准向导安装程序，内置 GPUI 原生桌面客户端（`vps-switch-gpui.exe`）、后端守护进程（`vps-switch.exe`）与随包 Windows ConPTY，自动配置开始菜单与桌面快捷方式。
-- **`vps-switch-0.1.1-windows-x64-portable.zip`**：免安装绿色便携版，解压后双击 `vps-switch-gpui.exe`（或 `vps-switch.exe`）即可启动 GPUI 原生桌面客户端。
-- **`vps-switch-0.1.1-x86_64.msi`**：Windows 原生 MSI 包，适合命令行自动化部署（会把安装目录加进系统 PATH）。
+- **`vps-switch-0.1.2-windows-x64-setup.exe`（推荐）**：标准向导安装程序，内置 GPUI 原生桌面客户端（`vps-switch-gpui.exe`）、后端守护进程（`vps-switch.exe`）与随包 Windows ConPTY，自动配置开始菜单与桌面快捷方式。
+- **`vps-switch-0.1.2-windows-x64-portable.zip`**：免安装绿色便携版，解压后双击 `vps-switch-gpui.exe`（或 `vps-switch.exe`）即可启动 GPUI 原生桌面客户端。
+- **`vps-switch-0.1.2-x86_64.msi`**：Windows 原生 MSI 包，适合命令行自动化部署（会把安装目录加进系统 PATH）。
 
 > *Windows 运行提示：*
 > 1. *GPUI 原生客户端使用 DirectX 11 硬件加速渲染（虚拟机模拟显示适配器同样可用并自动降级动画）。*
 > 2. *因未购买商业代码签名证书，首次运行若遇 Windows SmartScreen 提示“未知发布者”，点击「更多信息」→「仍要运行」即可。*
 
-### Linux (x86_64)
+### Linux (x86_64 / arm64)
 适用于将 VPS Switch 作为无头服务直接部署在云服务器或中转机上，Web 前端已完整内嵌在单一二进制中：
 
 ```bash
-# 解压
-tar -xzf vps-switch-0.1.1-linux-x86_64.tar.gz
-cd vps-switch-0.1.1-linux-x86_64
+# 解压（x86_64 用 linux-x86_64，ARM 机器用 linux-aarch64）
+tar -xzf vps-switch-0.1.2-linux-x86_64.tar.gz
+cd vps-switch-0.1.2-linux-x86_64
 
 # 快速运行（默认监听 18800 端口，浏览器访问 http://<你的IP>:18800）
 ./vps-switch
@@ -82,8 +82,8 @@ sudo systemctl enable --now vps-switch
 *Linux 首启默认开启 Web 登录密码，默认初始凭据为：`admin` / `vps-switch`（登录后可在设置面板修改）。*
 
 ### macOS（arm64 / x86_64）
-- **`vps-switch-0.1.1-macos-aarch64.zip`**：Apple Silicon（M 系列芯片）原生包。
-- **`vps-switch-0.1.1-macos-x86_64.zip`**：Intel 芯片原生包。
+- **`vps-switch-0.1.2-macos-aarch64.zip`**：Apple Silicon（M 系列芯片）原生包。
+- **`vps-switch-0.1.2-macos-x86_64.zip`**：Intel 芯片原生包。
 
 解压得到 `VPS Switch.app`，拖入「应用程序」后即可运行（首次打开若提示未签名，请在「系统设置 → 隐私与安全性」中点击「仍要打开」，或执行 `xattr -dr com.apple.quarantine "VPS Switch.app"`）。
 

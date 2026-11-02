@@ -745,6 +745,11 @@ impl Database {
             _ => "unknown",
         };
         let merged_os = os_info.or(existing.os_info);
+        let merged_latency = if status == "online" {
+            latency_ms.or(existing.latency_ms)
+        } else {
+            latency_ms
+        };
         let last_connected = if status == "online" {
             Some(now.clone())
         } else {
@@ -764,7 +769,7 @@ impl Database {
                  WHERE id = ?7",
                 params![
                     status,
-                    latency_ms,
+                    merged_latency,
                     merged_os
                         .as_ref()
                         .and_then(|o| serde_json::to_string(o).ok()),

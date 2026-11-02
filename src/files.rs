@@ -241,6 +241,7 @@ pub async fn list_dir(
             list_remote_dir_once(pool, db, host_id, dir_path).await?
         }
     };
+    let _ = db.update_check_result(host_id, "online", None, None, None);
     pool.put_cached_dir(host_id, req_key, &res).await;
     Ok(res)
 }

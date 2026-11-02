@@ -57,6 +57,7 @@ pub struct TerminalView {
 
     // 刷新/重连计数与无头测试样本
     pub refresh_count: u32,
+    pub status_dirty: bool,
     mock_sample_line: Option<String>,
 }
 
@@ -142,9 +143,13 @@ impl TerminalView {
             context_menu_pos: None,
             scroll_remainder: 0.0,
             refresh_count: 0,
+            status_dirty: false,
             mock_sample_line,
         };
         this.drain_events();
+        if this.mock_sample_line.is_some() {
+            this.status_dirty = false;
+        }
         Self::poll(cx);
         this
     }
@@ -236,14 +241,17 @@ impl TerminalView {
                     self.meta = meta;
                     self.connecting = false;
                     self.create_error = None;
+                    self.status_dirty = true;
                 }
                 SessionEvent::CreateFailed(reason) => {
                     self.connecting = false;
                     self.create_error = Some(reason);
+                    self.status_dirty = true;
                 }
                 SessionEvent::Connected => {
                     self.connecting = false;
                     self.disconnected = None;
+                    self.status_dirty = true;
                 }
                 SessionEvent::Updated => {
                     self.snapshot = self.session.snapshot();

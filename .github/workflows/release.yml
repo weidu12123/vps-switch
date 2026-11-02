@@ -35,6 +35,11 @@ jobs:
             target: x86_64-unknown-linux-gnu
             kind: linux
             arch_suffix: x86_64
+          - name: Linux arm64
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            kind: linux
+            arch_suffix: aarch64
 
     steps:
       - uses: actions/checkout@v4
@@ -92,8 +97,8 @@ jobs:
             <key>CFBundleName</key><string>VPS Switch</string>
             <key>CFBundleDisplayName</key><string>VPS Switch</string>
             <key>CFBundleIdentifier</key><string>com.weidu12123.vps-switch</string>
-            <key>CFBundleVersion</key><string>0.1.1</string>
-            <key>CFBundleShortVersionString</key><string>0.1.1</string>
+            <key>CFBundleVersion</key><string>0.1.2</string>
+            <key>CFBundleShortVersionString</key><string>0.1.2</string>
             <key>CFBundleExecutable</key><string>vps-switch-gpui</string>
             <key>CFBundlePackageType</key><string>APPL</string>
             <key>LSMinimumSystemVersion</key><string>12.0</string>
@@ -102,7 +107,7 @@ jobs:
           </plist>
           PLIST
 
-          ZIP_NAME="vps-switch-0.1.1-macos-${{ matrix.arch_suffix }}.zip"
+          ZIP_NAME="vps-switch-0.1.2-macos-${{ matrix.arch_suffix }}.zip"
           cd dist
           ditto -c -k --sequesterRsrc --keepParent "VPS Switch.app" "$ZIP_NAME"
           shasum -a 256 "$ZIP_NAME" > "$ZIP_NAME.sha256"
@@ -113,15 +118,15 @@ jobs:
         run: |
           set -euo pipefail
           BIN_DIR="target/${{ matrix.target }}/release"
-          PKG_DIR="dist/vps-switch-0.1.1-linux-x86_64"
+          PKG_DIR="dist/vps-switch-0.1.2-linux-${{ matrix.arch_suffix }}"
           mkdir -p "$PKG_DIR"
           cp "$BIN_DIR/vps-switch" "$PKG_DIR/"
           chmod 755 "$PKG_DIR/vps-switch"
           cp vps-switch.service "$PKG_DIR/"
-          printf 'VPS Switch Linux x86_64 headless server.\nRun ./vps-switch (default port 18800).\n' > "$PKG_DIR/README.txt"
+          printf 'VPS Switch Linux ${{ matrix.arch_suffix }} headless server.\nRun ./vps-switch (default port 18800).\n' > "$PKG_DIR/README.txt"
           cd dist
-          tar -czf vps-switch-0.1.1-linux-x86_64.tar.gz vps-switch-0.1.1-linux-x86_64
-          sha256sum vps-switch-0.1.1-linux-x86_64.tar.gz > vps-switch-0.1.1-linux-x86_64.tar.gz.sha256
+          tar -czf vps-switch-0.1.2-linux-${{ matrix.arch_suffix }}.tar.gz vps-switch-0.1.2-linux-${{ matrix.arch_suffix }}
+          sha256sum vps-switch-0.1.2-linux-${{ matrix.arch_suffix }}.tar.gz > vps-switch-0.1.2-linux-${{ matrix.arch_suffix }}.tar.gz.sha256
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

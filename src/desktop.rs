@@ -236,6 +236,7 @@ pub fn run_desktop_window(
                     UiEvent::OpenStandaloneTerminal { host_id, .. } => {
                         let _ = proxy_show.send_event(DesktopUserEvent::OpenStandaloneTerminal { host_id });
                     }
+                    UiEvent::HostsUpdated => {}
                 }
             }
         });

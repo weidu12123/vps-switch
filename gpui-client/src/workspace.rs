@@ -563,7 +563,28 @@ impl Workspace {
                 TerminalView::new(host_id, dark, cx)
             }
         });
-        cx.observe(&pane, |_, _, cx| cx.notify()).detach();
+        cx.observe(&pane, |this, pane, cx| {
+            let (dirty, host_id, connected) = {
+                let p = pane.read(cx);
+                (
+                    p.status_dirty,
+                    p.host_id.clone(),
+                    !p.connecting && p.pane_id.is_some() && p.create_error.is_none(),
+                )
+            };
+            if dirty {
+                pane.update(cx, |p, _| p.status_dirty = false);
+                if connected
+                    && let Some(h) = this.hosts.iter_mut().find(|h| h.id == host_id)
+                {
+                    h.status = "online".into();
+                    crate::tray::update_hosts(&this.hosts);
+                }
+                this.api.send(ApiCommand::LoadHosts);
+            }
+            cx.notify();
+        })
+        .detach();
         if let Some(tab) = self.open_tabs.get_mut(tab_index) {
             tab.panes.push(pane);
             tab.focused_pane = Some(tab.panes.len() - 1);
@@ -659,6 +680,7 @@ impl Workspace {
     }
 
     pub fn request_show_main_window(&self, cx: &mut Context<Self>) {
+        self.api.send(ApiCommand::LoadHosts);
         let handle = self.main_window;
         cx.defer(move |cx| {
             let _ = handle.update(cx, |_, window, _cx| {
@@ -719,7 +741,28 @@ impl Workspace {
                     TerminalView::new_attached(hid, meta_clone, dark, cx)
                 }
             });
-            cx.observe(&pane, |_, _, cx| cx.notify()).detach();
+            cx.observe(&pane, |this, pane, cx| {
+            let (dirty, host_id, connected) = {
+                let p = pane.read(cx);
+                (
+                    p.status_dirty,
+                    p.host_id.clone(),
+                    !p.connecting && p.pane_id.is_some() && p.create_error.is_none(),
+                )
+            };
+            if dirty {
+                pane.update(cx, |p, _| p.status_dirty = false);
+                if connected
+                    && let Some(h) = this.hosts.iter_mut().find(|h| h.id == host_id)
+                {
+                    h.status = "online".into();
+                    crate::tray::update_hosts(&this.hosts);
+                }
+                this.api.send(ApiCommand::LoadHosts);
+            }
+            cx.notify();
+        })
+        .detach();
             if let Some(tab) = self.open_tabs.get_mut(index) {
                 tab.panes.push(pane);
                 tab.focused_pane = Some(tab.panes.len() - 1);
@@ -815,6 +858,28 @@ impl Workspace {
             self.standalone_windows
                 .insert(host_id.to_owned(), handle.into());
             if let Some(v) = created_view {
+                cx.observe(&v, |this, pane, cx| {
+                    let (dirty, host_id, connected) = {
+                        let p = pane.read(cx);
+                        (
+                            p.status_dirty,
+                            p.host_id.clone(),
+                            !p.connecting && p.pane_id.is_some() && p.create_error.is_none(),
+                        )
+                    };
+                    if dirty {
+                        pane.update(cx, |p, _| p.status_dirty = false);
+                        if connected
+                            && let Some(h) = this.hosts.iter_mut().find(|h| h.id == host_id)
+                        {
+                            h.status = "online".into();
+                            crate::tray::update_hosts(&this.hosts);
+                        }
+                        this.api.send(ApiCommand::LoadHosts);
+                    }
+                    cx.notify();
+                })
+                .detach();
                 self.standalone_panes.insert(host_id.to_owned(), v);
             }
         }
@@ -1414,12 +1479,10 @@ impl Workspace {
                         if !self.filtered_hosts().iter().any(|h| h.id == host_id) {
                             self.reset_filters();
                         }
-                        // 自动触发一次在线与 OS 检测
-                        self.checking.insert(host_id.clone());
-                        self.api.send(ApiCommand::CheckHost(host_id.clone()));
-                    } else {
-                        self.api.send(ApiCommand::LoadHosts);
                     }
+                    // 新建或编辑保存主机后，立即触发一次在线状态与 OS 检测
+                    self.checking.insert(host_id.clone());
+                    self.api.send(ApiCommand::CheckHost(host_id.clone()));
                     crate::tray::update_hosts(&self.hosts);
                     self.host_modal = None;
                     self.detail_host_id = Some(host_id);
@@ -1481,6 +1544,13 @@ impl Workspace {
                     items,
                     prefetch_only,
                 } => {
+                    if let Some(h) = self.hosts.iter_mut().find(|h| h.id == host_id)
+                        && h.status != "online"
+                    {
+                        h.status = "online".into();
+                        crate::tray::update_hosts(&self.hosts);
+                        self.api.send(ApiCommand::LoadHosts);
+                    }
                     self.files.store_cache(
                         &host_id,
                         &requested_path,
@@ -1499,6 +1569,7 @@ impl Workspace {
                     }
                 }
                 ApiEvent::FilesListFailed { host_id, error } => {
+                    self.api.send(ApiCommand::LoadHosts);
                     if self.files.host_id.as_deref() == Some(host_id.as_str()) {
                         self.files.loading = false;
                         self.toast = Some(Toast {
@@ -1792,6 +1863,9 @@ impl Workspace {
                 }
                 ApiEvent::ShowMainWindow => {
                     self.request_show_main_window(cx);
+                }
+                ApiEvent::HostsUpdated => {
+                    self.api.send(ApiCommand::LoadHosts);
                 }
                 ApiEvent::OpenStandaloneTerminal { host_id, .. } => {
                     self.popout_terminal(&host_id, cx);

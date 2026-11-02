@@ -9703,7 +9703,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vps-switch"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "aes-gcm 0.10.3",
  "alacritty_terminal",
@@ -9742,7 +9742,7 @@ dependencies = [
 
 [[package]]
 name = "vps-switch-gpui"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "alacritty_terminal",
  "anyhow",

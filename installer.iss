@@ -2,7 +2,7 @@
 ; 编译为标准的 Windows Setup.exe 安装向导程序
 
 #define MyAppName "VPS Switch"
-#define MyAppVersion "0.1.1"
+#define MyAppVersion "0.1.2"
 #define MyAppPublisher "weidu12123"
 #define MyAppURL "https://github.com/weidu12123/vps-switch"
 #define MyAppExeName "vps-switch-gpui.exe"
@@ -39,7 +39,7 @@ ArchitecturesAllowed=x64compatible
 
 ; 产物输出路径与名称
 OutputDir=target\dist\packages
-OutputBaseFilename=vps-switch-0.1.1-windows-x64-setup
+OutputBaseFilename=vps-switch-0.1.2-windows-x64-setup
 
 ; 卸载清理：绝不删除 %APPDATA%\vps-switch 数据目录
 Uninstallable=yes

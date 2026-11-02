@@ -367,6 +367,15 @@ async fn authenticate_session(
         host.username.trim()
     };
 
+    if host.auth_type == "none" {
+        match session.authenticate_none(user).await? {
+            AuthResult::Success => return Ok(()),
+            AuthResult::Failure { .. } => {
+                return Err(anyhow!("SSH none（免凭据）认证被服务器拒绝"));
+            }
+        }
+    }
+
     if host.auth_type == "privateKey" {
         let key_pem = master_key
             .decrypt(host.encrypted_private_key.as_deref())?
@@ -382,9 +391,15 @@ async fn authenticate_session(
         }
     }
 
-    let password = master_key
+    let Some(password) = master_key
         .decrypt(host.encrypted_password.as_deref())?
-        .ok_or_else(|| anyhow!("该主机未配置密码"))?;
+        .filter(|p| !p.is_empty())
+    else {
+        if let AuthResult::Success = session.authenticate_none(user).await? {
+            return Ok(());
+        }
+        return Err(anyhow!("该主机未配置密码"));
+    };
 
     match session.authenticate_password(user, &password).await? {
         AuthResult::Success => return Ok(()),
@@ -667,6 +682,20 @@ pub async fn exec_short_command(session: &Handle<SshClientHandler>, cmd: &str) -
     Ok(merged)
 }
 
+/// 将 SSH 建连失败同步回写到主机状态表（超时/本机代理未开/网络未就绪记为 `unknown`，其余记为 `offline`）。
+pub fn record_ssh_connect_failure(db: &Database, host_id: &str, err: &anyhow::Error) {
+    if host_id == crate::models::LOCAL_HOST_ID {
+        return;
+    }
+    let msg = format!("{err:#}");
+    let status = if crate::inspector::connect_error_is_indeterminate(&msg) {
+        "unknown"
+    } else {
+        "offline"
+    };
+    let _ = db.update_check_result(host_id, status, None, None, Some(msg));
+}
+
 /// 主机级执行采集：并发闸 + 建连 + 完整输出/退出码。命令超时后主动 close channel。
 pub async fn exec_host_capture(
     pool: &SshPool,
@@ -680,9 +709,20 @@ pub async fn exec_host_capture(
         .get_record(host_id)?
         .ok_or_else(|| anyhow!("主机不存在: {host_id}"))?;
     let (jump, proxy_port) = db.resolve_ssh_route(&record)?;
-    let handle = pool
+    let started = Instant::now();
+    let handle = match pool
         .get_or_connect(&record, jump.as_ref(), proxy_port, db.master_key())
-        .await?;
+        .await
+    {
+        Ok(h) => h,
+        Err(err) => {
+            record_ssh_connect_failure(db, host_id, &err);
+            return Err(err);
+        }
+    };
+    let elapsed_ms = started.elapsed().as_millis() as i64;
+    let latency = (elapsed_ms >= 2).then_some(elapsed_ms);
+    let _ = db.update_check_result(host_id, "online", latency, None, None);
     exec_capture(&handle, cmd, timeout).await
 }
 
@@ -761,10 +801,20 @@ pub async fn open_host_channel(
         .get_record(host_id)?
         .ok_or_else(|| anyhow!("主机不存在: {host_id}"))?;
     let (jump, proxy_port) = db.resolve_ssh_route(&record)?;
-    let channel = pool
+    let started = Instant::now();
+    let channel = match pool
         .open_session_channel(&record, jump.as_ref(), proxy_port, db.master_key())
-        .await?;
-    let _ = db.update_check_result(&record.id, "online", None, None, None);
+        .await
+    {
+        Ok(ch) => ch,
+        Err(err) => {
+            record_ssh_connect_failure(db, &record.id, &err);
+            return Err(err);
+        }
+    };
+    let elapsed_ms = started.elapsed().as_millis() as i64;
+    let latency = (elapsed_ms >= 2).then_some(elapsed_ms);
+    let _ = db.update_check_result(&record.id, "online", latency, None, None);
     Ok((record, channel))
 }
 
@@ -778,23 +828,47 @@ pub async fn open_pane_channel(
         .get_record(host_id)?
         .ok_or_else(|| anyhow!("主机不存在: {host_id}"))?;
     let (jump, proxy_port) = db.resolve_ssh_route(&record)?;
-    let handle = pool
+    let started = Instant::now();
+    let handle = match pool
         .get_or_connect_pane(&record, jump.as_ref(), proxy_port, db.master_key())
-        .await?;
+        .await
+    {
+        Ok(h) => h,
+        Err(err) => {
+            record_ssh_connect_failure(db, &record.id, &err);
+            return Err(err);
+        }
+    };
     let channel = match handle.channel_open_session().await {
         Ok(ch) => ch,
         Err(_) => {
             pool.drop_pane_session(host_id).await;
-            let fresh = pool
+            let fresh = match pool
                 .get_or_connect_pane(&record, jump.as_ref(), proxy_port, db.master_key())
-                .await?;
-            fresh
+                .await
+            {
+                Ok(h) => h,
+                Err(err) => {
+                    record_ssh_connect_failure(db, &record.id, &err);
+                    return Err(err);
+                }
+            };
+            match fresh
                 .channel_open_session()
                 .await
-                .context("打开 SSH 会话通道失败")?
+                .context("打开 SSH 会话通道失败")
+            {
+                Ok(ch) => ch,
+                Err(err) => {
+                    record_ssh_connect_failure(db, &record.id, &err);
+                    return Err(err);
+                }
+            }
         }
     };
-    let _ = db.update_check_result(&record.id, "online", None, None, None);
+    let elapsed_ms = started.elapsed().as_millis() as i64;
+    let latency = (elapsed_ms >= 2).then_some(elapsed_ms);
+    let _ = db.update_check_result(&record.id, "online", latency, None, None);
     Ok((record, channel))
 }
 

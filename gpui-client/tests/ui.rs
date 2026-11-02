@@ -301,6 +301,17 @@ fn filter_dropdown_and_modals_work_end_to_end(cx: &mut TestAppContext) {
             Some("us-node")
         );
 
+        // 认证方式支持切换为「免凭据 (none)」
+        assert!(has_element(window, "modal-auth-none"));
+        click_element(window, "modal-auth-none", 1, cx);
+        assert_eq!(
+            ws.read(cx)
+                .host_modal
+                .as_ref()
+                .map(|m| m.auth_type.as_str()),
+            Some("none")
+        );
+
         // 主机编辑弹窗底部「允许 MCP 访问」复选框默认勾选，点击可切换
         assert!(has_element(window, "modal-check-mcp-exposed"));
         assert!(

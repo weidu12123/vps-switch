@@ -95,6 +95,7 @@ struct PrevHostSample {
 pub struct InspectorEngine {
     prev_samples: Mutex<HashMap<String, PrevHostSample>>,
     latest_snapshots: Mutex<HashMap<String, HostInspection>>,
+    last_wave_at: Mutex<Option<Instant>>,
 }
 
 /// 纯内核虚拟文件读取脚本：
@@ -211,11 +212,25 @@ fn summarize_probe_output(raw: &str) -> String {
     }
 }
 
-/// 连接失败里区分"超时"与"被拒绝/认证失败"。
-/// 超时只说明这次没连上、可能只是线路慢（慢 VPS 的 SSH 握手常超过 8 秒），不能据此判离线；
-/// 被拒绝（Connection refused）或认证失败才是确定的"连不上"。
-fn connect_error_is_timeout(msg: &str) -> bool {
-    msg.contains("超时") || msg.contains("deadline has elapsed") || msg.contains("timed out")
+/// 连接失败里区分"暂态/未决（超时、本机代理未就绪、本机网络未就绪）"与"远端明确拒绝/认证失败"。
+/// 1. 超时只说明这次没连上、可能只是线路慢（慢 VPS 的 SSH 握手常超过 8 秒）；
+/// 2. 开机自启瞬间网卡尚未拨号完成，或用户配置了走本机代理（127.0.0.1:7890）但代理软件还没启动完，
+///    此时连不上本机代理端口并不代表远端 VPS 离线；
+/// 以上情况均记为 `unknown`（灰灯），待后续自动补检恢复，避免开机全员误判红灯。
+pub fn connect_error_is_indeterminate(msg: &str) -> bool {
+    let lower = msg.to_ascii_lowercase();
+    msg.contains("超时")
+        || msg.contains("无法连接本机代理端口")
+        || msg.contains("无法连接本机 HTTP 代理端口")
+        || lower.contains("deadline has elapsed")
+        || lower.contains("timed out")
+        || lower.contains("network is unreachable")
+        || lower.contains("no route to host")
+        || lower.contains("temporary failure in name resolution")
+        || lower.contains("failed to lookup address")
+        || lower.contains("os error 10051")
+        || lower.contains("os error 10065")
+        || lower.contains("wsano_data")
 }
 
 impl InspectorEngine {
@@ -225,6 +240,19 @@ impl InspectorEngine {
 
     pub fn get_all_cached(&self) -> HashMap<String, HostInspection> {
         self.latest_snapshots.lock().unwrap().clone()
+    }
+
+    pub fn mark_wave_now(&self) {
+        *self.last_wave_at.lock().unwrap() = Some(Instant::now());
+    }
+
+    pub fn try_claim_wave(&self, min_interval: std::time::Duration) -> bool {
+        let mut guard = self.last_wave_at.lock().unwrap();
+        if guard.is_some_and(|at| at.elapsed() < min_interval) {
+            return false;
+        }
+        *guard = Some(Instant::now());
+        true
     }
 
     pub async fn inspect_host(
@@ -261,7 +289,7 @@ impl InspectorEngine {
                 // （确定连不上）。前者若也判离线，慢线路（跨境高延迟那类）会长期误红，
                 // 所以记成 unknown 交给界面用灰灯表示"这次没判定出来"，绝不冒充"离线"。
                 let msg = format!("{err:#}");
-                let status = if connect_error_is_timeout(&msg) {
+                let status = if connect_error_is_indeterminate(&msg) {
                     "unknown"
                 } else {
                     "offline"
@@ -775,5 +803,36 @@ fn parse_cpu_ticks(s: &str) -> CpuTicks {
         irq: it.next().unwrap_or(0),
         softirq: it.next().unwrap_or(0),
         steal: it.next().unwrap_or(0),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn classifies_boot_and_proxy_errors_as_indeterminate() {
+        assert!(connect_error_is_indeterminate(
+            "无法连接本机代理端口 127.0.0.1:7890（请确认代理软件已启动）: 由于目标计算机积极拒绝，无法连接。 (os error 10061)"
+        ));
+        assert!(connect_error_is_indeterminate(
+            "SSH 连接超时: deadline has elapsed"
+        ));
+        assert!(connect_error_is_indeterminate(
+            "SSH 连接失败: Network is unreachable (os error 10051)"
+        ));
+        assert!(!connect_error_is_indeterminate(
+            "SSH 连接失败: Connection refused (os error 10061)"
+        ));
+        assert!(!connect_error_is_indeterminate("SSH 密码认证失败"));
+    }
+
+    #[test]
+    fn wave_cooldown_throttles_duplicate_triggers() {
+        let engine = InspectorEngine::new();
+        assert!(engine.try_claim_wave(Duration::from_secs(10)));
+        assert!(!engine.try_claim_wave(Duration::from_secs(10)));
+        assert!(engine.try_claim_wave(Duration::ZERO));
     }
 }

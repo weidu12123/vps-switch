@@ -200,8 +200,8 @@ const updateStatus = ref<{
   checking: false,
   checked: false,
   hasUpdate: false,
-  currentVersion: 'v0.1.1',
-  latestVersion: 'v0.1.1',
+  currentVersion: 'v0.1.2',
+  latestVersion: 'v0.1.2',
 });
 
 // 拖拽排序
@@ -641,8 +641,8 @@ async function checkAppUpdate() {
         checking: false,
         checked: true,
         hasUpdate: Boolean(data.hasUpdate),
-        currentVersion: data.currentVersion || 'v0.1.1',
-        latestVersion: data.latestVersion || 'v0.1.1',
+        currentVersion: data.currentVersion || 'v0.1.2',
+        latestVersion: data.latestVersion || 'v0.1.2',
         publishedAt: data.publishedAt,
         releaseNotes: data.releaseNotes,
         releaseUrl: data.releaseUrl,
@@ -855,6 +855,8 @@ function subscribeUiEvents() {
             ? `Agent 唤起「${hostName}」终端: ${data.reason}`
             : `Agent 已唤起「${hostName}」终端供你操作`
         );
+      } else if (data.type === 'hostsUpdated') {
+        void fetchHosts(true);
       }
     } catch {
       // ignore
@@ -862,8 +864,8 @@ function subscribeUiEvents() {
   };
 }
 
-async function fetchHosts() {
-  loading.value = true;
+async function fetchHosts(silent = false) {
+  if (!silent) loading.value = true;
   try {
     const res = await apiFetch('/api/hosts');
     if (!res) return;
@@ -873,9 +875,9 @@ async function fetchHosts() {
       seedInspectionMap(data.inspections);
     }
   } catch (e) {
-    showToast(`读取主机列表失败: ${(e as Error).message}`, 'err');
+    if (!silent) showToast(`读取主机列表失败: ${(e as Error).message}`, 'err');
   } finally {
-    loading.value = false;
+    if (!silent) loading.value = false;
   }
 }
 
@@ -1037,6 +1039,7 @@ async function createPaneForTab(tab: OpenSessionTab, cwd?: string | null) {
       // 主机离线、密码错、会话过期都会撞上，独立窗口模式下连标签栏都没有，无路可退。
       tab.error = (data.error as string) || '启动终端失败';
       showToast(tab.error, 'err');
+      void fetchHosts(true);
       return;
     }
     tab.error = null;
@@ -1045,6 +1048,7 @@ async function createPaneForTab(tab: OpenSessionTab, cwd?: string | null) {
     if (host && host.status !== 'online') {
       host.status = 'online';
     }
+    void fetchHosts(true);
   } catch (e) {
     tab.error = `启动终端失败: ${(e as Error).message}`;
     showToast(tab.error, 'err');
@@ -1297,8 +1301,9 @@ async function handleModalSubmit(payload: HostUpsertPayload, editingId: string |
     if (data.host?.id) {
       detailHostId.value = data.host.id;
       rightWing.value = 'detail';
+      void checkSingleHost(data.host as PublicHost);
     }
-    showToast(editingId ? '主机已更新' : '主机已创建');
+    showToast(editingId ? '主机已更新，正在检测连接…' : '主机已创建，正在检测连接…');
   } catch (e) {
     showToast(`保存失败: ${(e as Error).message}`, 'err');
   }

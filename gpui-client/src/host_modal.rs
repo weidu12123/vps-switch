@@ -30,7 +30,7 @@ pub struct HostModalState {
     pub addr: Entity<InputState>,
     pub port: Entity<InputState>,
     pub username: Entity<InputState>,
-    pub auth_type: String, // "password" | "privateKey"
+    pub auth_type: String, // "password" | "privateKey" | "none"
     pub password: Entity<InputState>,
     pub private_key: Entity<TextareaState>,
     pub passphrase: Entity<InputState>,
@@ -58,12 +58,10 @@ impl HostModalState {
             .map(|h| h.username.clone())
             .unwrap_or_else(|| "root".into());
         let auth_type = editing
-            .map(|h| {
-                if h.auth_type == "privateKey" {
-                    "privateKey".to_owned()
-                } else {
-                    "password".to_owned()
-                }
+            .map(|h| match h.auth_type.as_str() {
+                "privateKey" => "privateKey".to_owned(),
+                "none" => "none".to_owned(),
+                _ => "password".to_owned(),
             })
             .unwrap_or_else(|| "password".into());
         let jump_host_id = editing
@@ -269,17 +267,20 @@ impl HostModalState {
             "mcpExposed": self.mcp_exposed,
         });
 
-        let pwd = self.password.read(cx).value().to_string();
-        if !pwd.is_empty() {
-            payload["password"] = serde_json::Value::String(pwd);
-        }
-        let pk = self.private_key.read(cx).value().to_string();
-        if !pk.trim().is_empty() {
-            payload["privateKey"] = serde_json::Value::String(pk);
-        }
-        let pass = self.passphrase.read(cx).value().to_string();
-        if !pass.is_empty() {
-            payload["passphrase"] = serde_json::Value::String(pass);
+        if self.auth_type == "password" {
+            let pwd = self.password.read(cx).value().to_string();
+            if !pwd.is_empty() {
+                payload["password"] = serde_json::Value::String(pwd);
+            }
+        } else if self.auth_type == "privateKey" {
+            let pk = self.private_key.read(cx).value().to_string();
+            if !pk.trim().is_empty() {
+                payload["privateKey"] = serde_json::Value::String(pk);
+            }
+            let pass = self.passphrase.read(cx).value().to_string();
+            if !pass.is_empty() {
+                payload["passphrase"] = serde_json::Value::String(pass);
+            }
         }
 
         Ok((payload, self.editing_id.clone()))
@@ -462,8 +463,11 @@ pub fn render_host_modal(
 
         // 第三行：认证方式 + 跳板机
         let is_pwd = modal.auth_type == "password";
+        let is_key = modal.auth_type == "privateKey";
+        let is_none = modal.auth_type == "none";
         let this_auth_pwd = this.clone();
         let this_auth_key = this.clone();
+        let this_auth_none = this.clone();
         let auth_switch = h_flex()
             .mt(px(4.))
             .gap(px(4.))
@@ -522,7 +526,37 @@ pub fn render_host_modal(
                         });
                     })
                     .child("SSH 私钥");
-                if !is_pwd {
+                if is_key {
+                    b.bg(palette.card_solid_bg)
+                        .text_color(palette.text_primary)
+                        .shadow_sm()
+                } else {
+                    b.text_color(palette.text_muted)
+                }
+            })
+            .child({
+                let b = div()
+                    .id("modal-auth-none")
+                    .test_support()
+                    .flex_1()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .py(px(5.))
+                    .rounded_lg()
+                    .text_size(px(12.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .cursor_pointer()
+                    .on_click(move |_, _, cx| {
+                        let _ = this_auth_none.update(cx, |w, cx| {
+                            if let Some(m) = &mut w.host_modal {
+                                m.auth_type = "none".into();
+                                cx.notify();
+                            }
+                        });
+                    })
+                    .child("免凭据");
+                if is_none {
                     b.bg(palette.card_solid_bg)
                         .text_color(palette.text_primary)
                         .shadow_sm()
@@ -691,7 +725,7 @@ pub fn render_host_modal(
                 .child(jump_col),
         );
 
-        // 第四行：密码 或 私钥 + 口令
+        // 第四行：密码 或 私钥 + 口令（免凭据模式无需输入）
         if is_pwd {
             let label = if modal.editing_id.is_some() && modal.has_saved_password {
                 "SSH 密码（已保存加密密码，留空则保持不变）"
@@ -704,7 +738,7 @@ pub fn render_host_modal(
                     .child(field_label(label, palette))
                     .child(Input::new(&modal.password)),
             );
-        } else {
+        } else if is_key {
             let key_label = if modal.editing_id.is_some() && modal.has_saved_private_key {
                 "SSH 私钥 (PEM / OpenSSH)（已保存加密私钥，留空则保持不变）"
             } else {
