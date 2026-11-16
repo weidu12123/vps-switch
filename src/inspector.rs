@@ -589,7 +589,10 @@ impl InspectorEngine {
         ]);
         #[cfg(windows)]
         cmd.creation_flags(0x08000000);
-        let out = cmd.output().await?;
+        cmd.kill_on_drop(true);
+        let out = tokio::time::timeout(std::time::Duration::from_secs(10), cmd.output())
+            .await
+            .map_err(|_| anyhow!("本机 Windows 探针超时 (10s)"))??;
         let text = String::from_utf8_lossy(&out.stdout);
         let (ins, _) = self.parse_windows_inspection_text(LOCAL_HOST_ID, &text)?;
         Ok(ins)
@@ -599,7 +602,10 @@ impl InspectorEngine {
     async fn inspect_local_linux(&self) -> Result<HostInspection> {
         let mut cmd = tokio::process::Command::new("sh");
         cmd.args(["-c", LINUX_INSPECT_SCRIPT]);
-        let out = cmd.output().await?;
+        cmd.kill_on_drop(true);
+        let out = tokio::time::timeout(std::time::Duration::from_secs(10), cmd.output())
+            .await
+            .map_err(|_| anyhow!("本机 Linux 探针超时 (10s)"))??;
         let text = String::from_utf8_lossy(&out.stdout);
         let (ins, _) = self.parse_linux_inspection(LOCAL_HOST_ID, &text)?;
         Ok(ins)

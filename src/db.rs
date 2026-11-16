@@ -1469,4 +1469,47 @@ mod tests {
         drop(db);
         std::fs::remove_dir_all(dir).unwrap();
     }
+
+    #[test]
+    fn update_local_host_does_not_deadlock_and_persists_fields() {
+        let (dir, db) = open_test_database();
+        let updated = db
+            .update_host(
+                LOCAL_HOST_ID,
+                HostUpsertPayload {
+                    name: "本机工作站".to_string(),
+                    addr: "10.0.0.1".to_string(),
+                    port: 2222,
+                    username: "other".to_string(),
+                    auth_type: "password".to_string(),
+                    password: None,
+                    private_key: None,
+                    passphrase: None,
+                    jump_host_id: None,
+                    role: Some("proxy".to_string()),
+                    tags: vec!["docker".to_string(), "prod".to_string()],
+                    links: vec![HostLink {
+                        id: String::new(),
+                        name: "Panel".to_string(),
+                        url: "http://127.0.0.1:8080".to_string(),
+                        description: "local ui".to_string(),
+                    }],
+                    pinned: false,
+                    favorited: false,
+                    archived: false,
+                    mcp_exposed: false,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(updated.id, LOCAL_HOST_ID);
+        assert_eq!(updated.kind, "local");
+        assert_eq!(updated.name, "本机工作站");
+        assert_eq!(updated.role.as_deref(), Some("proxy"));
+        assert_eq!(updated.tags, vec!["docker", "prod"]);
+        assert_eq!(updated.links.len(), 1);
+        assert!(!updated.mcp_exposed);
+        drop(db);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
