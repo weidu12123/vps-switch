@@ -545,23 +545,25 @@ impl Database {
             .filter(|s| !s.is_empty());
 
         if existing.kind == "local" {
-            let conn = self.conn.lock().map_err(|_| anyhow!("数据库锁异常"))?;
-            conn.execute(
-                "UPDATE hosts SET name = ?1, role = ?2, tags_json = ?3, links_json = ?4, mcp_exposed = ?5, updated_at = ?6 WHERE id = ?7",
-                params![
-                    if payload.name.trim().is_empty() {
-                        &existing.name
-                    } else {
-                        payload.name.trim()
-                    },
-                    role,
-                    serde_json::to_string(&tags)?,
-                    serde_json::to_string(&links)?,
-                    if payload.mcp_exposed { 1 } else { 0 },
-                    now,
-                    id
-                ],
-            )?;
+            {
+                let conn = self.conn.lock().map_err(|_| anyhow!("数据库锁异常"))?;
+                conn.execute(
+                    "UPDATE hosts SET name = ?1, role = ?2, tags_json = ?3, links_json = ?4, mcp_exposed = ?5, updated_at = ?6 WHERE id = ?7",
+                    params![
+                        if payload.name.trim().is_empty() {
+                            &existing.name
+                        } else {
+                            payload.name.trim()
+                        },
+                        role,
+                        serde_json::to_string(&tags)?,
+                        serde_json::to_string(&links)?,
+                        if payload.mcp_exposed { 1 } else { 0 },
+                        now,
+                        id
+                    ],
+                )?;
+            }
             return self
                 .get_public_host(id)?
                 .ok_or_else(|| anyhow!("更新本机后读取失败"));
